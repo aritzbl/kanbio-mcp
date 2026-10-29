@@ -129,7 +129,9 @@ Releases go to npm from GitHub Actions with trusted publishing (OIDC, no npm tok
 
 1. Bump `version` in `package.json` (and `package-lock.json`: `npm version <x.y.z> --no-git-tag-version`), commit.
 2. Tag it `v<x.y.z>` and push the tag. `.github/workflows/publish.yml` checks that the tag matches the version,
-   builds, tests and runs `npm publish --access public` with provenance.
+   builds, tests and runs `npm stage publish`: the version goes to npm's staging area, not live yet.
+3. A maintainer approves it with 2FA, in the **Staged Packages** tab on npmjs.com or with
+   `npm stage approve <stage-id>` (`npm stage list` shows the id). Only then it is published, with provenance.
 
 The very first version is published by hand (`npm publish --access public` from a logged-in npm account), and then
 the trusted publisher is set up on npmjs.com for `aritzbl/kanbio-mcp` and the `publish.yml` workflow.

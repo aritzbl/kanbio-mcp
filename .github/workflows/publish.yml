@@ -1,7 +1,9 @@
-# Publishes @kanbio/mcp to npm when a v* tag is pushed, with npm trusted
+# Stages @kanbio/mcp on npm when a v* tag is pushed, with npm trusted
 # publishing (OIDC): no npm token or secret, and npm adds provenance.
+# The version goes live only after a maintainer approves it with 2FA
+# (Staged Packages on npmjs.com, or `npm stage approve <stage-id>`).
 # Requires the trusted publisher on npmjs.com: repository aritzbl/kanbio-mcp,
-# workflow publish.yml.
+# workflow publish.yml, allowed action "npm stage publish".
 name: Publish
 
 on:
@@ -24,7 +26,7 @@ jobs:
           node-version: "22.x"
           registry-url: "https://registry.npmjs.org"
 
-      # Trusted publishing needs npm 11.5.1 or newer.
+      # Staged publishing needs npm 11.15.0 or newer.
       - name: Install npm 11.21.0
         run: npm install -g npm@11.21.0
 
@@ -39,4 +41,4 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm test
-      - run: npm publish --access public
+      - run: npm stage publish
