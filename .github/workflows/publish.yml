@@ -1,6 +1,6 @@
 # Publishes @kanbio/mcp to npm when a v* tag is pushed, with npm trusted
 # publishing (OIDC): no npm token or secret, and npm adds provenance.
-# Requires the trusted publisher on npmjs.com: repository axen-arg/kanbio-mcp,
+# Requires the trusted publisher on npmjs.com: repository aritzbl/kanbio-mcp,
 # workflow publish.yml.
 name: Publish
 

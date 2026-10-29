@@ -5,11 +5,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/axen-arg/kanbio-mcp.git"
+    "url": "git+https://github.com/aritzbl/kanbio-mcp.git"
   },
-  "homepage": "https://github.com/axen-arg/kanbio-mcp#readme",
+  "homepage": "https://github.com/aritzbl/kanbio-mcp#readme",
   "bugs": {
-    "url": "https://github.com/axen-arg/kanbio-mcp/issues"
+    "url": "https://github.com/aritzbl/kanbio-mcp/issues"
   },
   "type": "module",
   "bin": {
