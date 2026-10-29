@@ -2,7 +2,7 @@
   "name": "@kanbio/mcp",
   "version": "0.1.0",
   "description": "MCP server for Kanbio: read, comment, create and move tickets from Claude, Cursor or any MCP client.",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/axen-arg/kanbio-mcp.git"
