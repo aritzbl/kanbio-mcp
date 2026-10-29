@@ -1,10 +1,10 @@
-# kanbio-mcp
+# @kanbio/mcp
 
 [MCP](https://modelcontextprotocol.io) server for **Kanbio**, the mini-Jira. It lets your AI
 (Claude Code, Claude Desktop, Cursor or any MCP client) read tickets, comment, change their
 status and create them, as you, through a personal access token.
 
-It runs locally over stdio (`npx -y kanbio-mcp`) and calls the Kanbio REST API.
+It runs locally over stdio (`npx -y @kanbio/mcp`) and calls the Kanbio REST API.
 
 ## 1. Create a token
 
@@ -30,10 +30,10 @@ Two environment variables:
 ### Claude Code
 
 ```bash
-claude mcp add kanbio -e KANBIO_API_URL=https://kanbio.example.com/api -e KANBIO_TOKEN=kbn_... -- npx -y kanbio-mcp
+claude mcp add kanbio -e KANBIO_API_URL=https://kanbio.example.com/api -e KANBIO_TOKEN=kbn_... -- npx -y @kanbio/mcp
 ```
 
-Add `-s user` (before `--`) to have it in every project. On Windows use `-- cmd /c npx -y kanbio-mcp`.
+Add `-s user` (before `--`) to have it in every project. On Windows use `-- cmd /c npx -y @kanbio/mcp`.
 
 ### Claude Desktop
 
@@ -44,7 +44,7 @@ Settings → Developer → Edit Config (`claude_desktop_config.json`):
   "mcpServers": {
     "kanbio": {
       "command": "npx",
-      "args": ["-y", "kanbio-mcp"],
+      "args": ["-y", "@kanbio/mcp"],
       "env": {
         "KANBIO_API_URL": "https://kanbio.example.com/api",
         "KANBIO_TOKEN": "kbn_..."
@@ -63,7 +63,7 @@ Settings → MCP → Add new MCP server, or `~/.cursor/mcp.json` (all projects) 
 
 ### Other clients
 
-Any MCP client that runs stdio servers: command `npx`, args `-y kanbio-mcp`, and the two
+Any MCP client that runs stdio servers: command `npx`, args `-y @kanbio/mcp`, and the two
 variables above.
 
 ## Tools
@@ -122,3 +122,14 @@ claude mcp add kanbio-dev -e KANBIO_API_URL=http://localhost:4000/api -e KANBIO_
 ```
 
 Requires Node.js 20 or newer.
+
+## Releasing
+
+Releases go to npm from GitHub Actions with trusted publishing (OIDC, no npm token):
+
+1. Bump `version` in `package.json` (and `package-lock.json`: `npm version <x.y.z> --no-git-tag-version`), commit.
+2. Tag it `v<x.y.z>` and push the tag. `.github/workflows/publish.yml` checks that the tag matches the version,
+   builds, tests and runs `npm publish --access public` with provenance.
+
+The very first version is published by hand (`npm publish --access public` from a logged-in npm account), and then
+the trusted publisher is set up on npmjs.com for `axen-arg/kanbio-mcp` and the `publish.yml` workflow.
