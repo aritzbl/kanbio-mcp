@@ -1,8 +1,16 @@
 {
-  "name": "kanbio-mcp",
+  "name": "@kanbio/mcp",
   "version": "0.1.0",
   "description": "MCP server for Kanbio: read, comment, create and move tickets from Claude, Cursor or any MCP client.",
   "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/axen-arg/kanbio-mcp.git"
+  },
+  "homepage": "https://github.com/axen-arg/kanbio-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/axen-arg/kanbio-mcp/issues"
+  },
   "type": "module",
   "bin": {
     "kanbio-mcp": "dist/index.js"
@@ -14,9 +22,12 @@
   "engines": {
     "node": ">=20"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node --test \"dist/**/*.test.js\"",
+    "test": "npm run build && node --test dist/kanbio-mcp.test.js",
     "inspect": "npx @modelcontextprotocol/inspector@0.21.2 node dist/index.js"
   },
   "keywords": [
