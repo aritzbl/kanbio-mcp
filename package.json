@@ -1,6 +1,6 @@
 {
   "name": "@kanbio/mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "MCP server for Kanbio: read, comment, create and move tickets from Claude, Cursor or any MCP client.",
   "license": "MIT",
   "repository": {
