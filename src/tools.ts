@@ -357,7 +357,7 @@ export function registerTools(server: McpServer, kanbio: Kanbio): void {
         'Add a comment to a ticket as the token owner; Kanbio shows it with a "via AI" badge. To mention people, list them in `mentions` (email or name): each "@Name" already in the text becomes the mention, the rest are mentioned at the start. Mentioned people get a notification. Needs the comments:write permission.',
       inputSchema: {
         key: keySchema,
-        text: z.string().min(1).max(2000).describe('Comment text (plain text).'),
+        text: z.string().min(1).max(5000).describe('Comment text (plain text).'),
         mentions: z
           .array(personSchema)
           .max(20)
