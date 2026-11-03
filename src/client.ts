@@ -14,6 +14,10 @@ export class KanbioApiError extends Error {
     readonly apiMessage: string,
     /** Validation details, when the API sends them. */
     readonly details: string[] = [],
+    /** Machine-readable error code, e.g. INVALID_TRANSITION. */
+    readonly code?: string,
+    /** Values that go with the code, e.g. the allowed states. */
+    readonly params: Record<string, unknown> = {},
   ) {
     super(`Kanbio API ${status}: ${apiMessage}`);
   }
@@ -68,7 +72,7 @@ export function readConfig(
   return { config: { apiUrl, token }, problems: [] };
 }
 
-type Query = Record<string, string | number | string[] | undefined>;
+type Query = Record<string, string | number | boolean | string[] | undefined>;
 
 export class KanbioClient {
   constructor(
@@ -178,6 +182,8 @@ function toApiError(
   if (payload && typeof payload === 'object') {
     const body = payload as {
       message?: unknown;
+      code?: unknown;
+      params?: unknown;
       errors?: { path?: unknown[]; message?: unknown }[];
     };
     const message = Array.isArray(body.message)
@@ -189,7 +195,17 @@ function toApiError(
       const path = Array.isArray(error.path) ? error.path.join('.') : '';
       return path ? `${path}: ${String(error.message)}` : String(error.message);
     });
-    return new KanbioApiError(status, message, details);
+    const params =
+      body.params && typeof body.params === 'object'
+        ? (body.params as Record<string, unknown>)
+        : {};
+    return new KanbioApiError(
+      status,
+      message,
+      details,
+      typeof body.code === 'string' ? body.code : undefined,
+      params,
+    );
   }
   return new KanbioApiError(status, text.slice(0, 200) || `HTTP ${status}`);
 }

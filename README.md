@@ -75,23 +75,36 @@ name; sprints by `active`, `backlog` or name.
 | Tool | What it does | Permission |
 | --- | --- | --- |
 | `list_projects` | Projects the token reaches, with your role | `tickets:read` |
-| `search_tickets` | Search by project, status, assignee, sprint and text, with a limit | `tickets:read` |
-| `get_ticket` | A ticket with its description and comments | `tickets:read` |
+| `search_tickets` | Search by project, status (state names), open or finished, assignee, sprint and text, with a limit | `tickets:read` |
+| `get_ticket` | A ticket with its status, where it can move, description and comments | `tickets:read` |
 | `list_sprints` | Sprints of a project | `tickets:read` |
 | `list_members` | Members of a project (email and role) | `tickets:read` |
-| `my_tickets` | Tickets assigned to you | `tickets:read` |
+| `my_tickets` | Tickets assigned to you (open ones, or all) | `tickets:read` |
 | `add_comment` | Comment, with mentions and files (shown "via AI") | `comments:write` |
-| `change_status` | Move along the workflow, To Merge included | `tickets:status` |
+| `change_status` | Move to another state of the project's workflow, by name | `tickets:status` |
 | `assign_ticket` | Assign or unassign | `tickets:assign` |
-| `create_ticket` | Create a ticket (backlog or a sprint), with files in the description | `tickets:create` |
+| `create_ticket` | Create a ticket in the first state (backlog or a sprint), with files in the description | `tickets:create` |
 | `update_ticket` | Edit title, description, type, priority, points, labels; add files to the description | `tickets:edit` |
 | `move_to_sprint` | Move tickets to a sprint or the backlog | `sprints:write` |
 
 No tool deletes anything (it only discards the files it has just uploaded when saving fails). Read tools are marked `readOnlyHint`; write tools
 `destructiveHint: false`, so clients can ask before running them.
 
-Workflow: To Do → In Progress → [To Merge →] To Test → Done | Rejected; Done and Rejected can go
-back to To Test or In Progress.
+## Workflows
+
+Each project follows its own workflow: its states (free names, in any language, e.g. "En curso")
+and the moves allowed between them. The tools read it from Kanbio, so nothing is hardcoded:
+
+- `get_ticket` shows the status and the states the ticket can move to (`Can move to: …`).
+- `change_status` takes the target state by name; case and accents do not matter. Old keys
+  (`todo`, `in_progress`, `to_merge`, `qa`, `done`, `rejected`) still work in projects on the
+  classic workflow (To Do → In Progress → [To Merge →] To Test → Done | Rejected). An unknown name
+  is answered with the states the project has.
+- `search_tickets` filters by state names (any project) and by `done`: `true` for finished
+  tickets (states that count as done, like Done or Rejected), `false` for open ones.
+- New tickets start in the first state of the workflow.
+
+This version needs a Kanbio API with configurable workflows (`GET /projects/:id/workflow`).
 
 ### Files and photos
 
@@ -118,8 +131,9 @@ count against the 5000 characters.
 ## Errors
 
 API errors come back as plain sentences the AI can act on: a missing permission (403) names it
-and says not to retry, an invalid status change lists the allowed next statuses, an expired or
-revoked token (401) says how to create a new one, and 429 asks to wait a minute.
+and says not to retry, an invalid status change lists the states the ticket can go to, an unknown
+state lists the states of the project, an expired or revoked token (401) says how to create a new
+one, and 429 asks to wait a minute.
 
 ## Security
 

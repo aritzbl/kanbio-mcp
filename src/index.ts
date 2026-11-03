@@ -14,7 +14,7 @@ const server = new McpServer(
   { name: 'kanbio', version },
   {
     instructions:
-      'Kanbio is a mini-Jira. Tickets are identified by key (PROJ-12) and projects by key (PROJ). Use list_projects first when the project is unknown, get_ticket to read a ticket with its comments, and search_tickets or my_tickets to find work. Write tools act as the token owner; none of them deletes. When a tool answers with a permission error, do not retry: tell the user which permission the token lacks.',
+      'Kanbio is a mini-Jira. Tickets are identified by key (PROJ-12) and projects by key (PROJ). Use list_projects first when the project is unknown, get_ticket to read a ticket with its comments and where it can move (each project has its own workflow of states), and search_tickets or my_tickets to find work. Write tools act as the token owner; none of them deletes. When a tool answers with a permission error, do not retry: tell the user which permission the token lacks.',
   },
 );
 

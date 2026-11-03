@@ -1,38 +1,5 @@
 import { KanbioApiError, KanbioClient } from './client.js';
 
-export const STATUSES = [
-  'todo',
-  'in_progress',
-  'to_merge',
-  'qa',
-  'done',
-  'rejected',
-] as const;
-export type Status = (typeof STATUSES)[number];
-
-/** How Kanbio shows each status. */
-export const STATUS_LABELS: Record<Status, string> = {
-  todo: 'To Do',
-  in_progress: 'In Progress',
-  to_merge: 'To Merge',
-  qa: 'To Test',
-  done: 'Done',
-  rejected: 'Rejected',
-};
-
-/** Mirror of the API workflow, only used to explain a rejected move. */
-export const TRANSITIONS: Record<Status, readonly Status[]> = {
-  todo: ['in_progress'],
-  in_progress: ['to_merge', 'qa'],
-  to_merge: ['qa'],
-  qa: ['done', 'rejected'],
-  done: ['qa', 'in_progress'],
-  rejected: ['qa', 'in_progress'],
-};
-
-export const WORKFLOW_TEXT =
-  'To Do → In Progress → [To Merge →] To Test → Done | Rejected; Done and Rejected can go back to To Test or In Progress. To Merge is optional and only reachable from In Progress.';
-
 export const TICKET_TYPES = ['bug', 'task', 'story'] as const;
 export const PRIORITIES = ['low', 'medium', 'high', 'critical'] as const;
 export const STORY_POINTS = [1, 2, 3, 5, 8, 13, 21] as const;
@@ -72,7 +39,10 @@ export interface Ticket {
   type: string;
   priority: string;
   storyPoints: number | null;
-  status: Status;
+  /** The state the ticket is in. */
+  stateId: string;
+  /** The name of that state, e.g. "To Test" or "En curso". */
+  status: string;
   reporterId: string;
   assigneeId: string | null;
   sprintId: string | null;
@@ -80,6 +50,31 @@ export interface Ticket {
   labels: string[];
   createdAt: string;
   updatedAt: string;
+}
+
+/** A state of a project's workflow. */
+export interface WorkflowState {
+  id: string;
+  name: string;
+  position: number;
+  color: string;
+  /** Tickets here count as finished. */
+  isDone: boolean;
+  notifiesQa: boolean;
+  /** Old status key (todo, qa…), only in the classic workflow. */
+  legacyKey: string | null;
+}
+
+/**
+ * The workflow a project follows: states in board order (new tickets start
+ * in the first one) and the moves allowed between them. Staying in the same
+ * state is always allowed.
+ */
+export interface Workflow {
+  templateId: string;
+  name: string;
+  states: WorkflowState[];
+  transitions: { fromStateId: string; toStateId: string }[];
 }
 
 export interface CommentNode {
@@ -129,6 +124,7 @@ export class Kanbio {
   private meCache: Cached<Member> | null = null;
   private readonly members = new Map<string, Cached<Member[]>>();
   private readonly sprints = new Map<string, Cached<Sprint[]>>();
+  private readonly workflows = new Map<string, Cached<Workflow>>();
 
   constructor(readonly api: KanbioClient) {}
 
@@ -205,6 +201,27 @@ export class Kanbio {
     );
   }
 
+  projectWorkflow(projectId: string): Promise<Workflow> {
+    return this.cached(
+      this.workflows.get(projectId),
+      () => this.api.get<Workflow>(`/projects/${projectId}/workflow`),
+      (entry) => this.workflows.set(projectId, entry),
+    );
+  }
+
+  /**
+   * The workflow of the ticket's project. Reloads it when the ticket is in a
+   * state the cached one does not have (the project changed its workflow).
+   */
+  async ticketWorkflow(ticket: Ticket): Promise<Workflow> {
+    const workflow = await this.projectWorkflow(ticket.projectId);
+    if (workflow.states.some((state) => state.id === ticket.stateId)) {
+      return workflow;
+    }
+    this.workflows.delete(ticket.projectId);
+    return this.projectWorkflow(ticket.projectId);
+  }
+
   /** Forgets the sprints of a project (after moving tickets around). */
   forgetSprints(projectId: string): void {
     this.sprints.delete(projectId);
@@ -273,6 +290,41 @@ export class Kanbio {
         : `No sprint "${query}" in ${project?.key ?? 'the project'}. Open sprints: ${listed}.`,
     );
   }
+}
+
+/**
+ * A state of the workflow by name (case, accents and outer spaces do not
+ * matter), by old status key (qa, only in the classic workflow) or by id.
+ */
+export function findState(
+  workflow: Workflow,
+  query: string,
+): WorkflowState | undefined {
+  const lower = query.trim().toLowerCase();
+  const plain = normalize(query);
+  const byPlainName = workflow.states.filter((s) => normalize(s.name) === plain);
+  return (
+    workflow.states.find((s) => s.name.trim().toLowerCase() === lower) ??
+    workflow.states.find((s) => s.legacyKey === lower || s.id === query.trim()) ??
+    (byPlainName.length === 1 ? byPlainName[0] : undefined)
+  );
+}
+
+/** The states a ticket in `stateId` may move to, in board order. */
+export function allowedTargets(
+  workflow: Workflow,
+  stateId: string,
+): WorkflowState[] {
+  return workflow.states.filter((state) =>
+    workflow.transitions.some(
+      (move) => move.fromStateId === stateId && move.toStateId === state.id,
+    ),
+  );
+}
+
+/** "A, B, C", or "nothing" for an empty list. */
+export function stateList(states: Pick<WorkflowState, 'name'>[]): string {
+  return states.map((state) => state.name).join(', ') || 'nothing';
 }
 
 /** People whose email is the query, or whose name contains it. */
