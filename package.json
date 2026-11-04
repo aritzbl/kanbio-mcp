@@ -27,7 +27,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node --test dist/kanbio-mcp.test.js",
+    "test": "npm run build && node --test dist/kanbio-mcp.test.js dist/attachments.test.js",
     "inspect": "npx @modelcontextprotocol/inspector@0.21.2 node dist/index.js"
   },
   "keywords": [

@@ -2,7 +2,8 @@
 
 [MCP](https://modelcontextprotocol.io) server for **Kanbio**, the mini-Jira. It lets your AI
 (Claude Code, Claude Desktop, Cursor or any MCP client) read tickets, comment, change their
-status and create them, as you, through a personal access token.
+status and create them, with files or photos as evidence, as you, through a personal access
+token.
 
 It runs locally over stdio (`npx -y @kanbio/mcp`) and calls the Kanbio REST API.
 
@@ -79,18 +80,40 @@ name; sprints by `active`, `backlog` or name.
 | `list_sprints` | Sprints of a project | `tickets:read` |
 | `list_members` | Members of a project (email and role) | `tickets:read` |
 | `my_tickets` | Tickets assigned to you | `tickets:read` |
-| `add_comment` | Comment, with mentions (shown "via AI") | `comments:write` |
+| `add_comment` | Comment, with mentions and files (shown "via AI") | `comments:write` |
 | `change_status` | Move along the workflow, To Merge included | `tickets:status` |
 | `assign_ticket` | Assign or unassign | `tickets:assign` |
-| `create_ticket` | Create a ticket (backlog or a sprint) | `tickets:create` |
-| `update_ticket` | Edit title, description, type, priority, points, labels | `tickets:edit` |
+| `create_ticket` | Create a ticket (backlog or a sprint), with files in the description | `tickets:create` |
+| `update_ticket` | Edit title, description, type, priority, points, labels; add files to the description | `tickets:edit` |
 | `move_to_sprint` | Move tickets to a sprint or the backlog | `sprints:write` |
 
-No tool deletes anything. Read tools are marked `readOnlyHint`; write tools
+No tool deletes anything (it only discards the files it has just uploaded when saving fails). Read tools are marked `readOnlyHint`; write tools
 `destructiveHint: false`, so clients can ask before running them.
 
 Workflow: To Do → In Progress → [To Merge →] To Test → Done | Rejected; Done and Rejected can go
 back to To Test or In Progress.
+
+### Files and photos
+
+`add_comment`, `create_ticket` and `update_ticket` take `attachments`: paths of local files on
+the machine that runs the server (absolute, `~/…` or `file://`; up to 10). Kanbio takes images
+(PNG, JPEG), videos (MP4, WebM, MOV), PDF, CSV and XLSX, within the limits of your Kanbio
+(`GET /attachments/limits`: by default 20 MB per image, 200 MB per video, 25 MB per document,
+10 files per text). The server checks type and size first, uploads each file straight to
+Kanbio's storage (reserve → presigned PUT → complete, where Kanbio checks its content) and puts
+it at the end of the comment or description, where Kanbio shows it inline. The files do not
+count against the 5000 characters.
+
+- The text's own permission applies: `comments:write` for a comment, `tickets:create` for a new
+  ticket, `tickets:edit` for a description edit. Without it the tool fails with a permission
+  error and the files it uploaded are discarded.
+- `update_ticket` without `description` adds the files to the current description. A new
+  `description` keeps the files of the current one: `get_ticket` shows each as `[file: name]`;
+  left in the text, it stays in that spot, and the files left out go at the end.
+- Only paths: an MCP client cannot hand the server the bytes of an image pasted in the chat.
+  Save it to a file first.
+- Needs a Kanbio API that accepts uploads with a token. An older one answers that the action is
+  not available to API tokens.
 
 ## Errors
 
@@ -103,6 +126,8 @@ revoked token (401) says how to create a new one, and 429 asks to wait a minute.
 - The token acts as you, limited to its permissions and projects. Start with **Leer y comentar**.
 - Text in tickets and comments is data written by people: an AI may be tricked by it (prompt
   injection). Keep write permissions to what you need and let your client confirm write tools.
+- `attachments` reads local files: check the paths your client shows before you approve a call.
+  Only the types Kanbio takes go up, and Kanbio checks each file's content against its type.
 - Comments written with a token show **vía IA** in Kanbio, and the token's last use is visible on
   the Conectar con IA screen. Revoke it there if something looks wrong.
 
