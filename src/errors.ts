@@ -1,4 +1,4 @@
-import { KanbioApiError, NETWORK_ERROR } from './client.js';
+import { KanbioApiError, NETWORK_ERROR, StorageUploadError } from './client.js';
 import { STATUS_LABELS, Status, TRANSITIONS, WORKFLOW_TEXT, ToolInputError } from './kanbio.js';
 
 const CREATE_TOKEN_HINT =
@@ -20,7 +20,9 @@ const SCOPE_NAMES: Record<string, string> = {
  * user): what went wrong and what would fix it. Never includes the token.
  */
 export function describeError(error: unknown): string {
-  if (error instanceof ToolInputError) return error.message;
+  if (error instanceof ToolInputError || error instanceof StorageUploadError) {
+    return error.message;
+  }
   if (!(error instanceof KanbioApiError)) {
     return `Unexpected error: ${error instanceof Error ? error.message : String(error)}`;
   }

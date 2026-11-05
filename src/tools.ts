@@ -1,6 +1,13 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
+import {
+  ACCEPTED_TYPES_TEXT,
+  filesText,
+  keepFiles,
+  saveWithAttachments,
+  UploadedFile,
+} from './attachments.js';
 import { describeError } from './errors.js';
 import {
   addPeople,
@@ -61,6 +68,15 @@ const sprintSchema = z
   .min(1)
   .max(80)
   .describe('"active" (the active sprint), "backlog", or a sprint name.');
+
+const attachmentsSchema = z
+  .array(z.string().min(1).max(1024))
+  .min(1)
+  .max(10)
+  .optional()
+  .describe(
+    `Files or photos to attach (evidence, screenshots…): absolute paths of local files on the machine running this server. Kanbio takes ${ACCEPTED_TYPES_TEXT}. They are uploaded and placed at the end of the text.`,
+  );
 
 type Result = CallToolResult;
 
@@ -354,7 +370,7 @@ export function registerTools(server: McpServer, kanbio: Kanbio): void {
     {
       title: 'Add a comment',
       description:
-        'Add a comment to a ticket as the token owner; Kanbio shows it with a "via AI" badge. To mention people, list them in `mentions` (email or name): each "@Name" already in the text becomes the mention, the rest are mentioned at the start. Mentioned people get a notification. Needs the comments:write permission.',
+        'Add a comment to a ticket as the token owner; Kanbio shows it with a "via AI" badge. To mention people, list them in `mentions` (email or name): each "@Name" already in the text becomes the mention, the rest are mentioned at the start. Mentioned people get a notification. Files or photos in `attachments` go at the end of the comment. Needs the comments:write permission.',
       inputSchema: {
         key: keySchema,
         text: z.string().min(1).max(5000).describe('Comment text (plain text).'),
@@ -363,6 +379,7 @@ export function registerTools(server: McpServer, kanbio: Kanbio): void {
           .max(20)
           .optional()
           .describe('People to mention: emails or names of project members.'),
+        attachments: attachmentsSchema,
       },
       annotations: { ...WRITE, idempotentHint: false },
     },
@@ -373,10 +390,23 @@ export function registerTools(server: McpServer, kanbio: Kanbio): void {
           (input.mentions ?? []).map((m) => kanbio.member(ticket.projectId, m)),
         );
         const unique = [...new Map(people.map((p) => [p.id, p])).values()];
-        const comment = await kanbio.api.post<CommentNode>(
-          `/tickets/${ticket.id}/comments`,
-          { content: withMentions(input.text, unique) },
-        );
+        const content = withMentions(input.text, unique);
+        const post = (text: string) =>
+          kanbio.api.post<CommentNode>(`/tickets/${ticket.id}/comments`, {
+            content: text,
+          });
+        const { result: comment } = input.attachments
+          ? await saveWithAttachments(
+              kanbio.api,
+              {
+                projectId: ticket.projectId,
+                paths: input.attachments,
+                text: content,
+                scope: 'comments:write',
+              },
+              post,
+            )
+          : { result: await post(content) };
         return `Comment added to ${ticket.key}: "${readableText(comment.content)}"`;
       }),
   );
@@ -439,7 +469,7 @@ export function registerTools(server: McpServer, kanbio: Kanbio): void {
     {
       title: 'Create a ticket',
       description:
-        'Create a ticket in a project, reported by the token owner. It starts in To Do. Optionally assign it (needs tickets:assign) or plan it into a sprint (needs sprints:write); otherwise it goes to the backlog. Needs the tickets:create permission.',
+        'Create a ticket in a project, reported by the token owner. It starts in To Do. Optionally assign it (needs tickets:assign) or plan it into a sprint (needs sprints:write); otherwise it goes to the backlog. Files or photos in `attachments` go at the end of the description. Needs the tickets:create permission.',
       inputSchema: {
         project: projectSchema,
         title: z.string().min(1).max(200),
@@ -459,6 +489,7 @@ export function registerTools(server: McpServer, kanbio: Kanbio): void {
         assignee: personSchema.optional(),
         sprint: sprintSchema.optional(),
         labels: z.array(z.string().min(1).max(40)).max(20).optional(),
+        attachments: attachmentsSchema,
       },
       annotations: { ...WRITE, idempotentHint: false },
     },
@@ -473,20 +504,30 @@ export function registerTools(server: McpServer, kanbio: Kanbio): void {
           input.sprint && wantedSprint !== 'backlog'
             ? await kanbio.sprint(project.id, input.sprint)
             : null;
-        const ticket = await kanbio.api.post<Ticket>(
-          `/projects/${project.id}/tickets`,
-          {
+        const create = (description: string | undefined) =>
+          kanbio.api.post<Ticket>(`/projects/${project.id}/tickets`, {
             title: input.title,
             type: input.type,
-            description: input.description,
+            description,
             priority: input.priority,
             storyPoints: input.story_points,
             labels: input.labels,
             ...(assignee ? { assigneeId: assignee.id } : {}),
             ...(sprint ? { sprintId: sprint.id } : {}),
-          },
-        );
-        return `Created ${ticket.key}: "${ticket.title}" (To Do, ${sprint ? sprint.name : 'backlog'}${assignee ? `, assigned to ${personName(assignee)}` : ''}).`;
+          });
+        const { result: ticket, files } = input.attachments
+          ? await saveWithAttachments(
+              kanbio.api,
+              {
+                projectId: project.id,
+                paths: input.attachments,
+                text: input.description,
+                scope: 'tickets:create',
+              },
+              create,
+            )
+          : { result: await create(input.description), files: [] };
+        return `Created ${ticket.key}: "${ticket.title}" (To Do, ${sprint ? sprint.name : 'backlog'}${assignee ? `, assigned to ${personName(assignee)}` : ''})${files.length ? ` with ${filesText(files)}` : ''}.`;
       }),
   );
 
@@ -495,7 +536,7 @@ export function registerTools(server: McpServer, kanbio: Kanbio): void {
     {
       title: 'Update a ticket',
       description:
-        'Edit the fields of a ticket: title, description, type, priority, story points or labels. Only the fields given change. Status, assignee and sprint have their own tools. Needs the tickets:edit permission.',
+        'Edit the fields of a ticket: title, description, type, priority, story points or labels. Only the fields given change. Status, assignee and sprint have their own tools. Files or photos in `attachments` go at the end of the description (the new one, or the current one when no description is given). A new description keeps the files of the current one: each "[file: name]" that get_ticket showed stays as that file, and the rest go at the end; null clears the description and its files. Needs the tickets:edit permission.',
       inputSchema: {
         key: keySchema,
         title: z.string().min(1).max(200).optional(),
@@ -521,6 +562,7 @@ export function registerTools(server: McpServer, kanbio: Kanbio): void {
           .max(20)
           .optional()
           .describe('Replaces every label.'),
+        attachments: attachmentsSchema,
       },
       annotations: { ...WRITE, idempotentHint: true },
     },
@@ -534,14 +576,41 @@ export function registerTools(server: McpServer, kanbio: Kanbio): void {
         if (input.story_points !== undefined) patch.storyPoints = input.story_points;
         if (input.labels !== undefined) patch.labels = input.labels;
         const fields = Object.keys(patch);
-        if (fields.length === 0) {
+        if (fields.length === 0 && !input.attachments) {
           throw new ToolInputError(
-            'Nothing to change: give at least one of title, description, type, priority, story_points or labels.',
+            'Nothing to change: give at least one of title, description, type, priority, story_points, labels or attachments.',
           );
         }
         const ticket = await kanbio.ticket(input.key);
-        await kanbio.api.patch<Ticket>(`/tickets/${ticket.id}`, patch);
-        return `${ticket.key} updated (${fields.join(', ')}).`;
+        // The AI never sees the file tokens: keep the files it cannot write back.
+        if (typeof input.description === 'string') {
+          patch.description = keepFiles(input.description, ticket.description);
+        }
+        const update = (changes: Record<string, unknown>) =>
+          kanbio.api.patch<Ticket>(`/tickets/${ticket.id}`, changes);
+        let files: UploadedFile[] = [];
+        if (input.attachments) {
+          ({ files } = await saveWithAttachments(
+            kanbio.api,
+            {
+              projectId: ticket.projectId,
+              paths: input.attachments,
+              text:
+                input.description === undefined
+                  ? ticket.description
+                  : (patch.description as string | null),
+              scope: 'tickets:edit',
+            },
+            (description) => update({ ...patch, description }),
+          ));
+        } else {
+          await update(patch);
+        }
+        const changed =
+          files.length && !fields.includes('description')
+            ? [...fields, 'description']
+            : fields;
+        return `${ticket.key} updated (${changed.join(', ')})${files.length ? `; attached ${filesText(files)}` : ''}.`;
       }),
   );
 

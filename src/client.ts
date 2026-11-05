@@ -22,7 +22,12 @@ export class KanbioApiError extends Error {
 /** Status 0: Kanbio could not be reached at all. */
 export const NETWORK_ERROR = 0;
 
+/** A file could not be PUT to Kanbio's file storage (S3). */
+export class StorageUploadError extends Error {}
+
 const TIMEOUT_MS = 20_000;
+// Videos can weigh hundreds of MB.
+const UPLOAD_TIMEOUT_MS = 10 * 60_000;
 
 /**
  * Reads KANBIO_API_URL and KANBIO_TOKEN. The URL may be given with or without
@@ -81,6 +86,37 @@ export class KanbioClient {
 
   patch<T>(path: string, body: unknown): Promise<T> {
     return this.request<T>('PATCH', path, body);
+  }
+
+  async delete(path: string): Promise<void> {
+    await this.request<unknown>('DELETE', path);
+  }
+
+  /**
+   * PUTs a file to a presigned storage URL the API signed. No token: the URL
+   * is the permission, and the bucket rejects a second kind of auth. The type
+   * and size must be the ones the URL was signed for.
+   */
+  async putFile(url: string, body: Uint8Array<ArrayBuffer>, contentType: string): Promise<void> {
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: 'PUT',
+        headers: { 'Content-Type': contentType },
+        body,
+        signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new StorageUploadError(
+        `Could not reach Kanbio's file storage (${reason}). Try again; if it keeps failing, the storage may be down.`,
+      );
+    }
+    if (!response.ok) {
+      throw new StorageUploadError(
+        `Kanbio's file storage rejected the upload (HTTP ${response.status}). Try again; if it keeps failing, tell the user.`,
+      );
+    }
   }
 
   private async request<T>(
