@@ -1,5 +1,5 @@
 import { KanbioApiError, NETWORK_ERROR, StorageUploadError } from './client.js';
-import { STATUS_LABELS, Status, TRANSITIONS, WORKFLOW_TEXT, ToolInputError } from './kanbio.js';
+import { ToolInputError } from './kanbio.js';
 
 const CREATE_TOKEN_HINT =
   'The user can create one in Kanbio (sidebar → "Conectar con IA") and put it in KANBIO_TOKEN.';
@@ -57,12 +57,19 @@ export function describeError(error: unknown): string {
     case 429:
       return 'Kanbio is rate limiting this token (429). Wait a minute and try again.';
     case 400: {
-      const transition = /Invalid status transition: (\w+) → (\w+)/.exec(message);
+      const params = error.params;
+      if (error.code === 'INVALID_TRANSITION') {
+        const from = String(params.from ?? 'its state');
+        const to = String(params.to ?? 'that state');
+        const allowed = names(params.allowed);
+        return `Kanbio does not allow moving this ticket from ${from} to ${to}. From ${from} it can go to: ${allowed.join(', ') || 'nothing'}. Each project has its own workflow.`;
+      }
+      if (error.code === 'UNKNOWN_STATE') {
+        return `The project has no state "${String(params.status ?? '')}". Its states: ${names(params.states).join(', ') || 'none'}.`;
+      }
+      const transition = /Invalid status transition: (.+) → (.+)$/.exec(message);
       if (transition) {
-        const from = transition[1] as Status;
-        const to = transition[2] as Status;
-        const allowed = (TRANSITIONS[from] ?? []).map((s) => `${STATUS_LABELS[s]} (${s})`);
-        return `Kanbio does not allow moving a ticket from ${STATUS_LABELS[from] ?? from} to ${STATUS_LABELS[to] ?? to}. From ${STATUS_LABELS[from] ?? from} it can go to: ${allowed.join(', ') || 'nothing'}. Workflow: ${WORKFLOW_TEXT}`;
+        return `Kanbio does not allow moving this ticket from ${transition[1]} to ${transition[2]}. get_ticket shows where it can move.`;
       }
       const details = error.details.length > 0 ? ` (${error.details.join('; ')})` : '';
       return `Kanbio rejected the request (400): ${message}${details}.`;
@@ -70,4 +77,9 @@ export function describeError(error: unknown): string {
     default:
       return `Kanbio answered ${error.status}: ${message}.`;
   }
+}
+
+/** A list of names from error params; anything else is ignored. */
+function names(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(String) : [];
 }

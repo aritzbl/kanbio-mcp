@@ -1,11 +1,13 @@
 import {
+  allowedTargets,
   CommentNode,
   Member,
   Project,
   Sprint,
-  STATUS_LABELS,
+  stateList,
   Ticket,
   personName,
+  Workflow,
 } from './kanbio.js';
 
 const MENTION = /@\[([^\]\n]{1,80})\]\(user:([0-9a-f-]{36})\)/gi;
@@ -78,19 +80,28 @@ function sprintName(names: Names, id: string | null): string {
 /** One line per ticket: key, status, type, priority, title, assignee, sprint. */
 export function ticketLine(ticket: Ticket, names: Names): string {
   const points = ticket.storyPoints ? ` · ${ticket.storyPoints} pts` : '';
-  return `${ticket.key} · ${STATUS_LABELS[ticket.status] ?? ticket.status} · ${ticket.type} · ${ticket.priority}${points} · "${ticket.title}" · ${person(names, ticket.assigneeId)} · ${sprintName(names, ticket.sprintId)}`;
+  return `${ticket.key} · ${ticket.status} · ${ticket.type} · ${ticket.priority}${points} · "${ticket.title}" · ${person(names, ticket.assigneeId)} · ${sprintName(names, ticket.sprintId)}`;
 }
 
 const DESCRIPTION_LIMIT = 4000;
 
+/**
+ * The whole ticket. With the workflow of its project it also says whether the
+ * status counts as finished and where the ticket can move.
+ */
 export function ticketDetail(
   ticket: Ticket,
   names: Names,
   comments: CommentNode[] | null,
+  workflow: Workflow | null = null,
 ): string {
+  const state = workflow?.states.find((s) => s.id === ticket.stateId);
   const lines = [
     `${ticket.key}: ${ticket.title}`,
-    `Status: ${STATUS_LABELS[ticket.status] ?? ticket.status} (${ticket.status})`,
+    `Status: ${ticket.status}${state?.isDone ? ' (finished)' : ''}`,
+    ...(workflow
+      ? [`Can move to: ${stateList(allowedTargets(workflow, ticket.stateId))}`]
+      : []),
     `Type: ${ticket.type} · Priority: ${ticket.priority}${ticket.storyPoints ? ` · ${ticket.storyPoints} story points` : ''}`,
     `Assignee: ${person(names, ticket.assigneeId)} · Reporter: ${person(names, ticket.reporterId)}`,
     `Sprint: ${sprintName(names, ticket.sprintId)}${ticket.labels.length ? ` · Labels: ${ticket.labels.join(', ')}` : ''}`,

@@ -21,19 +21,20 @@ import {
   withMentions,
 } from './format.js';
 import {
+  allowedTargets,
   CommentNode,
+  findState,
   Kanbio,
   Member,
   matchPeople,
   personName,
   PRIORITIES,
-  STATUS_LABELS,
-  STATUSES,
+  stateList,
   STORY_POINTS,
   Ticket,
   TICKET_TYPES,
   ToolInputError,
-  WORKFLOW_TEXT,
+  Workflow,
 } from './kanbio.js';
 
 const READ = { readOnlyHint: true, openWorldHint: false } as const;
@@ -53,10 +54,13 @@ const projectSchema = z
   .min(1)
   .max(50)
   .describe('Project key, e.g. PROJ (see list_projects).');
-const statusSchema = z
-  .enum(STATUSES)
+const stateSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(100)
   .describe(
-    'Status id: todo (To Do), in_progress (In Progress), to_merge (To Merge), qa (To Test), done (Done), rejected (Rejected).',
+    'A state name of the project\'s workflow, e.g. "In Progress" or "En curso" (case does not matter).',
   );
 const personSchema = z
   .string()
@@ -79,6 +83,18 @@ const attachmentsSchema = z
   );
 
 type Result = CallToolResult;
+
+/** "PROJ has no state X", with the states it does have. */
+function noSuchState(
+  projectKey: string,
+  query: string,
+  workflow: Workflow,
+  more = '',
+): ToolInputError {
+  return new ToolInputError(
+    `${projectKey} has no state "${query}". Its states: ${stateList(workflow.states)}.${more}`,
+  );
+}
 
 function text(value: string): Result {
   return { content: [{ type: 'text', text: value }] };
@@ -198,11 +214,19 @@ export function registerTools(server: McpServer, kanbio: Kanbio): void {
       inputSchema: {
         project: projectSchema.optional(),
         status: z
-          .array(statusSchema)
+          .array(stateSchema)
           .min(1)
-          .max(STATUSES.length)
+          .max(50)
           .optional()
-          .describe('Any of these statuses.'),
+          .describe(
+            'Any of these states, by name (case does not matter), e.g. ["In Progress", "To Test"]. Each project has its own workflow, so names can differ between projects.',
+          ),
+        done: z
+          .boolean()
+          .optional()
+          .describe(
+            'true: only finished tickets (states that count as done, like Done or Rejected); false: only open ones.',
+          ),
         assignee: z
           .string()
           .min(1)
@@ -239,9 +263,21 @@ export function registerTools(server: McpServer, kanbio: Kanbio): void {
             );
           } else sprint = (await kanbio.sprint(project.id, input.sprint)).id;
         }
+        // In one project, check the names against its workflow and search by id.
+        let stateIds: string[] | undefined;
+        if (project && input.status) {
+          const workflow = await kanbio.projectWorkflow(project.id);
+          stateIds = input.status.map((name) => {
+            const state = findState(workflow, name);
+            if (!state) throw noSuchState(project.key, name, workflow);
+            return state.id;
+          });
+        }
         const result = await kanbio.api.get<SearchResult>('/tickets/search', {
           projectId: project?.id,
-          status: input.status,
+          status: stateIds ? undefined : input.status,
+          stateId: stateIds ? [...new Set(stateIds)] : undefined,
+          done: input.done,
           assigneeId: input.assignee
             ? await assigneeFilter(kanbio, input.assignee, project?.id)
             : undefined,
@@ -258,7 +294,7 @@ export function registerTools(server: McpServer, kanbio: Kanbio): void {
     {
       title: 'Get a ticket',
       description:
-        'Read one ticket by key: status, type, priority, assignee, sprint, description and its comments (threads, oldest first; "via AI" marks comments written through a token).',
+        'Read one ticket by key: status and the states it can move to (each project has its own workflow), type, priority, assignee, sprint, description and its comments (threads, oldest first; "via AI" marks comments written through a token).',
       inputSchema: {
         key: keySchema,
         include_comments: z.boolean().default(true),
@@ -268,13 +304,15 @@ export function registerTools(server: McpServer, kanbio: Kanbio): void {
     (input) =>
       run(async () => {
         const ticket = await kanbio.ticket(input.key);
-        const [names, comments] = await Promise.all([
+        const [names, comments, workflow] = await Promise.all([
           namesFor(kanbio, [ticket]),
           input.include_comments
             ? kanbio.api.get<CommentNode[]>(`/tickets/${ticket.id}/comments`)
             : Promise.resolve(null),
+          // The ticket is still worth reading without its workflow.
+          kanbio.ticketWorkflow(ticket).catch(() => null),
         ]);
-        return ticketDetail(ticket, names, comments);
+        return ticketDetail(ticket, names, comments, workflow);
       }),
   );
 
@@ -339,7 +377,7 @@ export function registerTools(server: McpServer, kanbio: Kanbio): void {
         include_done: z
           .boolean()
           .default(false)
-          .describe('Also list Done and Rejected tickets.'),
+          .describe('Also list finished tickets (states like Done or Rejected).'),
         limit: z.number().int().min(1).max(50).default(20),
       },
       annotations: READ,
@@ -348,9 +386,7 @@ export function registerTools(server: McpServer, kanbio: Kanbio): void {
       run(async () => {
         const result = await kanbio.api.get<SearchResult>('/tickets/search', {
           assigneeId: 'me',
-          status: input.include_done
-            ? undefined
-            : STATUSES.filter((s) => s !== 'done' && s !== 'rejected'),
+          done: input.include_done ? undefined : false,
           limit: input.limit,
         });
         return listTickets(
@@ -415,20 +451,32 @@ export function registerTools(server: McpServer, kanbio: Kanbio): void {
     'change_status',
     {
       title: 'Change the status',
-      description: `Move a ticket to another status. Kanbio enforces the workflow: ${WORKFLOW_TEXT} An invalid move is rejected with the allowed next statuses. Needs the tickets:status permission.`,
-      inputSchema: { key: keySchema, status: statusSchema },
+      description:
+        'Move a ticket to another state. Each project has its own workflow (its states and the moves allowed between them); get_ticket shows the ticket\'s status and where it can move. Give the target state by name (case does not matter; old keys like qa still work in projects on the classic workflow). An invalid move is rejected with the states the ticket can go to. Needs the tickets:status permission.',
+      inputSchema: { key: keySchema, status: stateSchema },
       annotations: { ...WRITE, idempotentHint: true },
     },
     (input) =>
       run(async () => {
         const ticket = await kanbio.ticket(input.key);
-        if (ticket.status === input.status) {
-          return `${ticket.key} is already in ${STATUS_LABELS[ticket.status]}.`;
+        const workflow = await kanbio.ticketWorkflow(ticket);
+        const target = findState(workflow, input.status);
+        if (!target) {
+          const project = await kanbio.projectById(ticket.projectId);
+          throw noSuchState(
+            project?.key ?? 'The project',
+            input.status,
+            workflow,
+            ` From ${ticket.status}, ${ticket.key} can move to: ${stateList(allowedTargets(workflow, ticket.stateId))}.`,
+          );
+        }
+        if (target.id === ticket.stateId) {
+          return `${ticket.key} is already in ${ticket.status}.`;
         }
         const updated = await kanbio.api.patch<Ticket>(`/tickets/${ticket.id}`, {
-          status: input.status,
+          stateId: target.id,
         });
-        return `${updated.key}: ${STATUS_LABELS[ticket.status]} → ${STATUS_LABELS[updated.status]}.`;
+        return `${updated.key}: ${ticket.status} → ${updated.status}. From there it can move to: ${stateList(allowedTargets(workflow, updated.stateId))}.`;
       }),
   );
 
@@ -469,7 +517,7 @@ export function registerTools(server: McpServer, kanbio: Kanbio): void {
     {
       title: 'Create a ticket',
       description:
-        'Create a ticket in a project, reported by the token owner. It starts in To Do. Optionally assign it (needs tickets:assign) or plan it into a sprint (needs sprints:write); otherwise it goes to the backlog. Files or photos in `attachments` go at the end of the description. Needs the tickets:create permission.',
+        "Create a ticket in a project, reported by the token owner. It starts in the first state of the project's workflow (To Do in the classic one). Optionally assign it (needs tickets:assign) or plan it into a sprint (needs sprints:write); otherwise it goes to the backlog. Files or photos in `attachments` go at the end of the description. Needs the tickets:create permission.",
       inputSchema: {
         project: projectSchema,
         title: z.string().min(1).max(200),
@@ -527,7 +575,7 @@ export function registerTools(server: McpServer, kanbio: Kanbio): void {
               create,
             )
           : { result: await create(input.description), files: [] };
-        return `Created ${ticket.key}: "${ticket.title}" (To Do, ${sprint ? sprint.name : 'backlog'}${assignee ? `, assigned to ${personName(assignee)}` : ''})${files.length ? ` with ${filesText(files)}` : ''}.`;
+        return `Created ${ticket.key}: "${ticket.title}" (${ticket.status}, ${sprint ? sprint.name : 'backlog'}${assignee ? `, assigned to ${personName(assignee)}` : ''})${files.length ? ` with ${filesText(files)}` : ''}.`;
       }),
   );
 
