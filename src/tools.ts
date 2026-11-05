@@ -482,7 +482,7 @@ export function registerTools(server: McpServer, kanbio: Kanbio): void {
           .number()
           .int()
           .refine((n) => (STORY_POINTS as readonly number[]).includes(n), {
-            message: `Story points must be one of ${STORY_POINTS.join(', ')}`,
+            error: `Story points must be one of ${STORY_POINTS.join(', ')}`,
           })
           .optional()
           .describe(`Fibonacci: ${STORY_POINTS.join(', ')}.`),
@@ -552,7 +552,7 @@ export function registerTools(server: McpServer, kanbio: Kanbio): void {
           .number()
           .int()
           .refine((n) => (STORY_POINTS as readonly number[]).includes(n), {
-            message: `Story points must be one of ${STORY_POINTS.join(', ')}`,
+            error: `Story points must be one of ${STORY_POINTS.join(', ')}`,
           })
           .nullable()
           .optional()
