@@ -26,7 +26,8 @@ export function describeError(error: unknown): string {
   if (!(error instanceof KanbioApiError)) {
     return `Unexpected error: ${error instanceof Error ? error.message : String(error)}`;
   }
-  const message = error.apiMessage;
+  // The texts below add their own period.
+  const message = error.apiMessage.replace(/\.+$/, '');
   switch (error.status) {
     case NETWORK_ERROR:
       return `${message}. Check KANBIO_API_URL and that Kanbio is up.`;

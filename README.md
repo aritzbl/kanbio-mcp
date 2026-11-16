@@ -86,6 +86,7 @@ name; sprints by `active`, `backlog` or name.
 | `create_ticket` | Create a ticket in the first state (backlog or a sprint), with files in the description | `tickets:create` |
 | `update_ticket` | Edit title, description, type, priority, points, labels; add files to the description | `tickets:edit` |
 | `move_to_sprint` | Move tickets to a sprint or the backlog | `sprints:write` |
+| `create_sprint` | Create a sprint (it starts active; optional name and goal). Only a PM of the project or a superadmin, and only while the project has no active sprint | `sprints:write` |
 
 No tool deletes anything (it only discards the files it has just uploaded when saving fails). Read tools are marked `readOnlyHint`; write tools
 `destructiveHint: false`, so clients can ask before running them.

@@ -244,6 +244,16 @@ interface Call {
   body?: Record<string, unknown>;
 }
 
+/** What the API answers when a sprint is created: numbered, active, no goal. */
+const newSprint = {
+  id: 'sp-3',
+  name: 'Sprint 3',
+  goal: null,
+  status: 'active',
+  startDate: '2026-11-17T03:00:00.000Z',
+  endDate: '2026-11-30T03:00:00.000Z',
+};
+
 /** Answers like the Kanbio API for a few tickets and records every call. */
 class FakeApi {
   calls: Call[] = [];
@@ -278,13 +288,20 @@ class FakeApi {
   async patch(path: string, body: Record<string, unknown>): Promise<unknown> {
     this.calls.push({ method: 'PATCH', path, body });
     if (this.patchError) throw this.patchError;
+    if (path.startsWith('/sprints/')) return { ...newSprint, ...body };
     const found = this.tickets.find((t) => path === `/tickets/${t.id}`)!;
     const target = workflows[found.projectId].states.find((s) => s.id === body.stateId)!;
     return { ...found, stateId: target.id, status: target.name };
   }
 
-  async post(path: string): Promise<unknown> {
+  async post(path: string, body: Record<string, unknown>): Promise<unknown> {
+    this.calls.push({ method: 'POST', path, body });
+    if (/^\/projects\/[^/]+\/sprints$/.test(path)) return newSprint;
     throw new Error(`Unexpected POST ${path}`);
+  }
+
+  writes(): Call[] {
+    return this.calls.filter((call) => call.method !== 'GET');
   }
 
   patches(): Call[] {
@@ -401,6 +418,62 @@ describe('Per-project workflows', () => {
     const unknown = await call('search_tickets', { project: 'SUP', status: ['To Test'] });
     assert.equal(unknown.isError, true);
     assert.match(unknown.text, /SUP has no state "To Test"\. Its states: Nuevo, Triage/);
+  });
+
+  it('create_sprint sends the start of each day and reports the sprint', async () => {
+    const result = await call('create_sprint', {
+      project: 'sup',
+      start_date: '2026-11-17',
+      end_date: '2026-11-30',
+    });
+    assert.equal(result.isError, false);
+    assert.equal(result.text, 'Created Sprint 3 in SUP · active · 2026-11-17 → 2026-11-30.');
+    assert.deepEqual(api.writes(), [
+      {
+        method: 'POST',
+        path: '/projects/p-sup/sprints',
+        body: {
+          startDate: new Date('2026-11-17T00:00:00').toISOString(),
+          endDate: new Date('2026-11-30T00:00:00').toISOString(),
+        },
+      },
+    ]);
+  });
+
+  it('create_sprint saves the name and goal with a second call', async () => {
+    const result = await call('create_sprint', {
+      project: 'SUP',
+      start_date: '2026-11-17',
+      end_date: '2026-11-30',
+      name: 'Release 2',
+      goal: 'Cerrar la conciliación',
+    });
+    assert.equal(
+      result.text,
+      'Created Release 2 in SUP · active · 2026-11-17 → 2026-11-30 · goal: Cerrar la conciliación.',
+    );
+    assert.deepEqual(api.writes()[1], {
+      method: 'PATCH',
+      path: '/sprints/sp-3',
+      body: { name: 'Release 2', goal: 'Cerrar la conciliación' },
+    });
+  });
+
+  it('create_sprint rejects bad dates before calling the API', async () => {
+    const backwards = await call('create_sprint', {
+      project: 'SUP',
+      start_date: '2026-11-30',
+      end_date: '2026-11-17',
+    });
+    assert.equal(backwards.isError, true);
+    assert.match(backwards.text, /end_date must not be before start_date/);
+    const unreal = await call('create_sprint', {
+      project: 'SUP',
+      start_date: '2026-02-30',
+      end_date: '2026-03-10',
+    });
+    assert.equal(unreal.isError, true);
+    assert.equal(api.writes().length, 0);
   });
 
   it('my_tickets asks for open tickets with done=false', async () => {
