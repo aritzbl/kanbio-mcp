@@ -29,6 +29,7 @@ import {
   matchPeople,
   personName,
   PRIORITIES,
+  Sprint,
   stateList,
   STORY_POINTS,
   Ticket,
@@ -72,6 +73,18 @@ const sprintSchema = z
   .min(1)
   .max(80)
   .describe('"active" (the active sprint), "backlog", or a sprint name.');
+
+/** A calendar day; a rolled-over date like 2026-02-30 is rejected. */
+const daySchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD.')
+  .refine(
+    (day) => new Date(`${day}T00:00:00Z`).toISOString().slice(0, 10) === day,
+    'Not a real date.',
+  );
+
+/** The start of the day where this runs, as the Kanbio web sends it. */
+const dayStart = (day: string) => new Date(`${day}T00:00:00`).toISOString();
 
 const attachmentsSchema = z
   .array(z.string().min(1).max(1024))
@@ -698,6 +711,54 @@ export function registerTools(server: McpServer, kanbio: Kanbio): void {
           );
         }
         return lines.join('\n');
+      }),
+  );
+
+  server.registerTool(
+    'create_sprint',
+    {
+      title: 'Create a sprint',
+      description:
+        'Create a sprint in a project. Kanbio starts it as the active sprint and numbers it ("Sprint N") unless you give a name, so the project must not have an active sprint (it is completed in Kanbio, not here). Needs the sprints:write permission and the PM or superadmin role in the project.',
+      inputSchema: {
+        project: projectSchema,
+        start_date: daySchema.describe('First day, YYYY-MM-DD.'),
+        end_date: daySchema.describe('Last day, YYYY-MM-DD, not before start_date.'),
+        name: z
+          .string()
+          .trim()
+          .min(1)
+          .max(80)
+          .optional()
+          .describe('Sprint name. By default Kanbio numbers it.'),
+        goal: z.string().trim().min(1).max(300).optional().describe('Sprint goal.'),
+      },
+      annotations: WRITE,
+    },
+    (input) =>
+      run(async () => {
+        if (input.end_date < input.start_date) {
+          throw new ToolInputError('end_date must not be before start_date.');
+        }
+        const project = await kanbio.project(input.project);
+        const created = await kanbio.api.post<Sprint>(`/projects/${project.id}/sprints`, {
+          startDate: dayStart(input.start_date),
+          endDate: dayStart(input.end_date),
+        });
+        kanbio.forgetSprints(project.id);
+        const summary = (sprint: Sprint) =>
+          `${sprint.name} in ${project.key} · ${sprint.status} · ${input.start_date} → ${input.end_date}${sprint.goal ? ` · goal: ${sprint.goal}` : ''}`;
+        if (!input.name && !input.goal) return `Created ${summary(created)}.`;
+        // The API creates with dates only; name and goal are a second call.
+        try {
+          const updated = await kanbio.api.patch<Sprint>(`/sprints/${created.id}`, {
+            name: input.name,
+            goal: input.goal,
+          });
+          return `Created ${summary(updated)}.`;
+        } catch (error) {
+          return `Created ${summary(created)}, but its name/goal were not saved: ${describeError(error)}`;
+        }
       }),
   );
 }
