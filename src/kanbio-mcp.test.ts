@@ -12,6 +12,7 @@ import {
   matchPeople,
   Member,
   Project,
+  Subtask,
   Ticket,
   ToolInputError,
   Workflow,
@@ -81,6 +82,14 @@ describe('API errors as messages for the AI', () => {
       new KanbioApiError(400, 'Invalid status transition: To Do → Esperando cliente'),
     );
     assert.match(message, /from To Do to Esperando cliente\. get_ticket shows where it can move/);
+  });
+
+  it('explains the subtask error codes', () => {
+    const say = (code: string) => describeError(new KanbioApiError(400, 'x', [], code));
+    assert.match(say('PARENT_IS_SELF'), /own parent/);
+    assert.match(say('PARENT_NOT_FOUND'), /same project as its parent/);
+    assert.match(say('PARENT_IS_SUBTASK'), /itself a subtask.*one level/);
+    assert.match(say('TICKET_HAS_SUBTASKS'), /cannot become a subtask/);
   });
 
   it('covers expired tokens, missing tickets, rate limits and the network', () => {
@@ -237,6 +246,24 @@ function ticket(id: string, key: string, projectId: string, stateId: string): Ti
   };
 }
 
+/** A subtask of SUP-3 as the detail route lists it. */
+function subtask(id: string, key: string, extra: Partial<Subtask> = {}): Subtask {
+  return {
+    id,
+    key,
+    title: `Ticket ${key}`,
+    type: 'task',
+    priority: 'medium',
+    stateId: 's-doing',
+    status: 'En curso',
+    isDone: false,
+    assigneeId: ana.id,
+    sprintId: 'sp-1',
+    epicId: null,
+    ...extra,
+  };
+}
+
 interface Call {
   method: string;
   path: string;
@@ -263,6 +290,30 @@ class FakeApi {
     ticket('t-1', 'SUP-1', 'p-sup', 's-triage'),
     ticket('t-2', 'SUP-2', 'p-sup', 's-closed'),
     ticket('t-3', 'CLS-1', 'p-cls', 'c-doing'),
+    // SUP-3 is a parent in Sprint 1 with 2 subtasks (SUP-4 open and in the backlog, SUP-5 done).
+    {
+      ...ticket('t-4', 'SUP-3', 'p-sup', 's-doing'),
+      sprintId: 'sp-1',
+      subtaskProgress: { total: 2, done: 1 },
+      subtasks: [
+        subtask('t-5', 'SUP-4', { sprintId: null }),
+        subtask('t-6', 'SUP-5', { stateId: 's-solved', status: 'Resuelto', isDone: true }),
+      ],
+    },
+    {
+      ...ticket('t-5', 'SUP-4', 'p-sup', 's-doing'),
+      parentId: 't-4',
+      parent: {
+        id: 't-4',
+        key: 'SUP-3',
+        title: 'Ticket SUP-3',
+        type: 'task',
+        stateId: 's-doing',
+        status: 'En curso',
+        sprintId: 'sp-1',
+      },
+      subtaskProgress: { total: 0, done: 0 },
+    },
   ];
 
   async get(path: string, query?: Record<string, unknown>): Promise<unknown> {
@@ -280,7 +331,11 @@ class FakeApi {
     const project = /^\/projects\/([^/]+)\/(\w+)$/.exec(path);
     if (project?.[2] === 'workflow') return workflows[project[1]];
     if (project?.[2] === 'members') return { items: [ana], totalPages: 1 };
-    if (project?.[2] === 'sprints') return [];
+    if (project?.[2] === 'sprints') {
+      return project[1] === 'p-sup'
+        ? [{ id: 'sp-1', name: 'Sprint 1', goal: null, status: 'active', startDate: null, endDate: null }]
+        : [];
+    }
     if (/^\/tickets\/[^/]+\/comments$/.test(path)) return [];
     throw new Error(`Unexpected GET ${path}`);
   }
@@ -290,13 +345,19 @@ class FakeApi {
     if (this.patchError) throw this.patchError;
     if (path.startsWith('/sprints/')) return { ...newSprint, ...body };
     const found = this.tickets.find((t) => path === `/tickets/${t.id}`)!;
-    const target = workflows[found.projectId].states.find((s) => s.id === body.stateId)!;
-    return { ...found, stateId: target.id, status: target.name };
+    const target = workflows[found.projectId].states.find((s) => s.id === body.stateId);
+    return target ? { ...found, stateId: target.id, status: target.name } : found;
   }
 
   async post(path: string, body: Record<string, unknown>): Promise<unknown> {
     this.calls.push({ method: 'POST', path, body });
     if (/^\/projects\/[^/]+\/sprints$/.test(path)) return newSprint;
+    if (path === '/projects/p-sup/tickets') {
+      // Like the API: a subtask inherits the sprint of its parent when none is sent.
+      const parent = this.tickets.find((t) => t.id === body.parentId);
+      const sprintId = 'sprintId' in body ? body.sprintId : (parent?.sprintId ?? null);
+      return { ...ticket('t-new', 'SUP-9', 'p-sup', 's-new'), title: String(body.title), sprintId };
+    }
     throw new Error(`Unexpected POST ${path}`);
   }
 
@@ -474,6 +535,90 @@ describe('Per-project workflows', () => {
     });
     assert.equal(unreal.isError, true);
     assert.equal(api.writes().length, 0);
+  });
+
+  it('get_ticket shows where the parent sits when the ticket is a subtask', async () => {
+    const result = await call('get_ticket', { key: 'SUP-4', include_comments: false });
+    assert.match(result.text, /^Parent: SUP-3 · En curso · "Ticket SUP-3" · Sprint 1$/m);
+    assert.doesNotMatch(result.text, /Subtasks \(/);
+  });
+
+  it('get_ticket lists the subtasks of a parent and flags the open one outside its sprint', async () => {
+    const result = await call('get_ticket', { key: 'SUP-3', include_comments: false });
+    assert.match(result.text, /^Subtasks \(1\/2 done\):$/m);
+    assert.match(
+      result.text,
+      /^- SUP-4 · En curso · "Ticket SUP-4" · Ana Pérez · backlog ⚠ open, outside the parent's sprint$/m,
+    );
+    // A done subtask, or one inside the sprint, carries no flag.
+    assert.match(result.text, /^- SUP-5 · Resuelto · "Ticket SUP-5" · Ana Pérez · Sprint 1$/m);
+    assert.doesNotMatch(result.text, /^Parent:/m);
+  });
+
+  it('get_ticket looks the same as before for a ticket from an older API', async () => {
+    const result = await call('get_ticket', { key: 'SUP-1', include_comments: false });
+    assert.doesNotMatch(result.text, /Parent:|Subtasks/);
+  });
+
+  it('lists mark a subtask with its parent and a parent with its progress', async () => {
+    const result = await call('search_tickets', {});
+    assert.match(result.text, /^SUP-3 · En curso .* · Sprint 1 · subtasks 1\/2$/m);
+    assert.match(result.text, /^SUP-4 · En curso .* · backlog · ↳ SUP-3$/m);
+    // No subtasks and no parent: the line ends as it always did.
+    assert.match(result.text, /^SUP-1 · Triage · task · medium · "Ticket SUP-1" · Ana Pérez · backlog$/m);
+    const mine = await call('my_tickets', {});
+    assert.match(mine.text, /↳ SUP-3/);
+  });
+
+  it('create_ticket with a parent sends parentId and says what the subtask inherited', async () => {
+    const result = await call('create_ticket', {
+      project: 'SUP',
+      title: 'Write tests',
+      type: 'task',
+      parent: 'sup-3',
+    });
+    assert.equal(result.isError, false);
+    assert.equal(result.text, 'Created SUP-9 as a subtask of SUP-3: "Write tests" (Nuevo, Sprint 1).');
+    const post = api.writes()[0];
+    assert.equal(post.path, '/projects/p-sup/tickets');
+    assert.equal(post.body?.parentId, 't-4');
+    assert.equal('sprintId' in (post.body ?? {}), false);
+  });
+
+  it('create_ticket with parent and sprint backlog sends sprintId null', async () => {
+    await call('create_ticket', { project: 'SUP', title: 'Loose', type: 'task', parent: 'SUP-3', sprint: 'backlog' });
+    assert.equal(api.writes()[0].body?.sprintId, null);
+    assert.equal(api.writes()[0].body?.parentId, 't-4');
+  });
+
+  it('create_ticket rejects a parent from another project before calling the API', async () => {
+    const result = await call('create_ticket', { project: 'SUP', title: 'X', type: 'task', parent: 'CLS-1' });
+    assert.equal(result.isError, true);
+    assert.equal(
+      result.text,
+      'CLS-1 is in CLS, not in SUP. A subtask must be in the same project as its parent.',
+    );
+    assert.equal(api.writes().length, 0);
+  });
+
+  it('create_ticket without a parent sends no parentId', async () => {
+    await call('create_ticket', { project: 'SUP', title: 'Plain', type: 'task' });
+    assert.equal('parentId' in (api.writes()[0].body ?? {}), false);
+  });
+
+  it('update_ticket links a parent by key and unlinks it with "none"', async () => {
+    const link = await call('update_ticket', { key: 'SUP-1', parent: 'SUP-3' });
+    assert.equal(link.text, 'SUP-1 updated (parent).');
+    assert.deepEqual(api.patches()[0], { method: 'PATCH', path: '/tickets/t-1', body: { parentId: 't-4' } });
+    await call('update_ticket', { key: 'SUP-4', parent: 'None' });
+    assert.deepEqual(api.patches()[1].body, { parentId: null });
+  });
+
+  it('update_ticket rejects a parent from another project', async () => {
+    const result = await call('update_ticket', { key: 'SUP-1', parent: 'CLS-1' });
+    assert.equal(result.isError, true);
+    assert.match(result.text, /same project as its parent/);
+    assert.equal(api.patches().length, 0);
   });
 
   it('my_tickets asks for open tickets with done=false', async () => {

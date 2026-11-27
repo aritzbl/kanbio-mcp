@@ -68,6 +68,18 @@ export function describeError(error: unknown): string {
       if (error.code === 'UNKNOWN_STATE') {
         return `The project has no state "${String(params.status ?? '')}". Its states: ${names(params.states).join(', ') || 'none'}.`;
       }
+      if (error.code === 'PARENT_IS_SELF') {
+        return 'A ticket cannot be its own parent.';
+      }
+      if (error.code === 'PARENT_NOT_FOUND') {
+        return 'The parent ticket does not exist in this project (or it was deleted). A subtask must be in the same project as its parent.';
+      }
+      if (error.code === 'PARENT_IS_SUBTASK') {
+        return 'That ticket is itself a subtask, and subtasks have one level only. Use its own parent as the parent (get_ticket shows it).';
+      }
+      if (error.code === 'TICKET_HAS_SUBTASKS') {
+        return 'This ticket has subtasks, so it cannot become a subtask. Unlink them first (update_ticket with parent "none" on each subtask).';
+      }
       const transition = /Invalid status transition: (.+) → (.+)$/.exec(message);
       if (transition) {
         return `Kanbio does not allow moving this ticket from ${transition[1]} to ${transition[2]}. get_ticket shows where it can move.`;

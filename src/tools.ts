@@ -63,6 +63,11 @@ const stateSchema = z
   .describe(
     'A state name of the project\'s workflow, e.g. "In Progress" or "En curso" (case does not matter).',
   );
+const parentSchema = z
+  .string()
+  .min(1)
+  .max(80)
+  .describe('Key of the parent ticket in the same project, e.g. PROJ-12.');
 const personSchema = z
   .string()
   .min(1)
@@ -530,7 +535,7 @@ export function registerTools(server: McpServer, kanbio: Kanbio): void {
     {
       title: 'Create a ticket',
       description:
-        "Create a ticket in a project, reported by the token owner. It starts in the first state of the project's workflow (To Do in the classic one). Optionally assign it (needs tickets:assign) or plan it into a sprint (needs sprints:write); otherwise it goes to the backlog. Files or photos in `attachments` go at the end of the description. Needs the tickets:create permission.",
+        "Create a ticket in a project, reported by the token owner. It starts in the first state of the project's workflow (To Do in the classic one). Optionally assign it (needs tickets:assign) or plan it into a sprint (needs sprints:write); otherwise it goes to the backlog. With `parent` (a ticket key in the same project) it is created as a subtask of that ticket; a subtask inherits the parent's sprint and epic unless you give a sprint (use sprint backlog to keep it out of any sprint). Files or photos in `attachments` go at the end of the description. Needs the tickets:create permission.",
       inputSchema: {
         project: projectSchema,
         title: z.string().min(1).max(200),
@@ -549,6 +554,11 @@ export function registerTools(server: McpServer, kanbio: Kanbio): void {
           .describe(`Fibonacci: ${STORY_POINTS.join(', ')}.`),
         assignee: personSchema.optional(),
         sprint: sprintSchema.optional(),
+        parent: parentSchema
+          .optional()
+          .describe(
+            'Make it a subtask of this ticket (key in the same project, e.g. PROJ-12). One level only: the parent cannot itself be a subtask.',
+          ),
         labels: z.array(z.string().min(1).max(40)).max(20).optional(),
         attachments: attachmentsSchema,
       },
@@ -557,6 +567,9 @@ export function registerTools(server: McpServer, kanbio: Kanbio): void {
     (input) =>
       run(async () => {
         const project = await kanbio.project(input.project);
+        const parent = input.parent
+          ? await kanbio.parentTicket(project.id, input.parent)
+          : null;
         const assignee = input.assignee
           ? await kanbio.member(project.id, input.assignee)
           : null;
@@ -565,6 +578,8 @@ export function registerTools(server: McpServer, kanbio: Kanbio): void {
           input.sprint && wantedSprint !== 'backlog'
             ? await kanbio.sprint(project.id, input.sprint)
             : null;
+        // "backlog" on a subtask must not inherit the parent's sprint.
+        const backlog = Boolean(parent) && wantedSprint === 'backlog';
         const create = (description: string | undefined) =>
           kanbio.api.post<Ticket>(`/projects/${project.id}/tickets`, {
             title: input.title,
@@ -575,6 +590,8 @@ export function registerTools(server: McpServer, kanbio: Kanbio): void {
             labels: input.labels,
             ...(assignee ? { assigneeId: assignee.id } : {}),
             ...(sprint ? { sprintId: sprint.id } : {}),
+            ...(backlog ? { sprintId: null } : {}),
+            ...(parent ? { parentId: parent.id } : {}),
           });
         const { result: ticket, files } = input.attachments
           ? await saveWithAttachments(
@@ -588,7 +605,12 @@ export function registerTools(server: McpServer, kanbio: Kanbio): void {
               create,
             )
           : { result: await create(input.description), files: [] };
-        return `Created ${ticket.key}: "${ticket.title}" (${ticket.status}, ${sprint ? sprint.name : 'backlog'}${assignee ? `, assigned to ${personName(assignee)}` : ''})${files.length ? ` with ${filesText(files)}` : ''}.`;
+        // A subtask may have inherited the sprint of its parent.
+        const inherited = !sprint && ticket.sprintId
+          ? (await kanbio.projectSprints(project.id)).find((s) => s.id === ticket.sprintId)
+          : undefined;
+        const where = sprint?.name ?? inherited?.name ?? (ticket.sprintId ? 'a sprint' : 'backlog');
+        return `Created ${ticket.key}${parent ? ` as a subtask of ${parent.key}` : ''}: "${ticket.title}" (${ticket.status}, ${where}${assignee ? `, assigned to ${personName(assignee)}` : ''})${files.length ? ` with ${filesText(files)}` : ''}.`;
       }),
   );
 
@@ -597,7 +619,7 @@ export function registerTools(server: McpServer, kanbio: Kanbio): void {
     {
       title: 'Update a ticket',
       description:
-        'Edit the fields of a ticket: title, description, type, priority, story points or labels. Only the fields given change. Status, assignee and sprint have their own tools. Files or photos in `attachments` go at the end of the description (the new one, or the current one when no description is given). A new description keeps the files of the current one: each "[file: name]" that get_ticket showed stays as that file, and the rest go at the end; null clears the description and its files. Needs the tickets:edit permission.',
+        'Edit the fields of a ticket: title, description, type, priority, story points or labels. Only the fields given change. Status, assignee and sprint have their own tools. `parent` makes the ticket a subtask of another ticket of the project (a key), moves it to another parent, or unlinks it ("none"); a ticket that has subtasks cannot become a subtask. Files or photos in `attachments` go at the end of the description (the new one, or the current one when no description is given). A new description keeps the files of the current one: each "[file: name]" that get_ticket showed stays as that file, and the rest go at the end; null clears the description and its files. Needs the tickets:edit permission.',
       inputSchema: {
         key: keySchema,
         title: z.string().min(1).max(200).optional(),
@@ -623,6 +645,11 @@ export function registerTools(server: McpServer, kanbio: Kanbio): void {
           .max(20)
           .optional()
           .describe('Replaces every label.'),
+        parent: parentSchema
+          .optional()
+          .describe(
+            'Key of the new parent in the same project (e.g. PROJ-12), or "none" to unlink the subtask.',
+          ),
         attachments: attachmentsSchema,
       },
       annotations: { ...WRITE, idempotentHint: true },
@@ -637,12 +664,19 @@ export function registerTools(server: McpServer, kanbio: Kanbio): void {
         if (input.story_points !== undefined) patch.storyPoints = input.story_points;
         if (input.labels !== undefined) patch.labels = input.labels;
         const fields = Object.keys(patch);
-        if (fields.length === 0 && !input.attachments) {
+        if (fields.length === 0 && !input.attachments && input.parent === undefined) {
           throw new ToolInputError(
-            'Nothing to change: give at least one of title, description, type, priority, story_points, labels or attachments.',
+            'Nothing to change: give at least one of title, description, type, priority, story_points, labels, parent or attachments.',
           );
         }
         const ticket = await kanbio.ticket(input.key);
+        if (input.parent !== undefined) {
+          const unlink = input.parent.trim().toLowerCase() === 'none';
+          patch.parentId = unlink
+            ? null
+            : (await kanbio.parentTicket(ticket.projectId, input.parent)).id;
+          fields.push('parent');
+        }
         // The AI never sees the file tokens: keep the files it cannot write back.
         if (typeof input.description === 'string') {
           patch.description = keepFiles(input.description, ticket.description);

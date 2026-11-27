@@ -76,15 +76,15 @@ name; sprints by `active`, `backlog` or name.
 | --- | --- | --- |
 | `list_projects` | Projects the token reaches, with your role | `tickets:read` |
 | `search_tickets` | Search by project, status (state names), open or finished, assignee, sprint and text, with a limit | `tickets:read` |
-| `get_ticket` | A ticket with its status, where it can move, description and comments | `tickets:read` |
+| `get_ticket` | A ticket with its status, where it can move, parent or subtasks, description and comments | `tickets:read` |
 | `list_sprints` | Sprints of a project | `tickets:read` |
 | `list_members` | Members of a project (email and role) | `tickets:read` |
 | `my_tickets` | Tickets assigned to you (open ones, or all) | `tickets:read` |
 | `add_comment` | Comment, with mentions and files (shown "via AI") | `comments:write` |
 | `change_status` | Move to another state of the project's workflow, by name | `tickets:status` |
 | `assign_ticket` | Assign or unassign | `tickets:assign` |
-| `create_ticket` | Create a ticket in the first state (backlog or a sprint), with files in the description | `tickets:create` |
-| `update_ticket` | Edit title, description, type, priority, points, labels; add files to the description | `tickets:edit` |
+| `create_ticket` | Create a ticket in the first state (backlog or a sprint), optionally as a subtask (`parent`), with files in the description | `tickets:create` |
+| `update_ticket` | Edit title, description, type, priority, points, labels, parent; add files to the description | `tickets:edit` |
 | `move_to_sprint` | Move tickets to a sprint or the backlog | `sprints:write` |
 | `create_sprint` | Create a sprint (it starts active; optional name and goal). Only a PM of the project or a superadmin, and only while the project has no active sprint | `sprints:write` |
 
@@ -106,6 +106,25 @@ and the moves allowed between them. The tools read it from Kanbio, so nothing is
 - New tickets start in the first state of the workflow.
 
 This version needs a Kanbio API with configurable workflows (`GET /projects/:id/workflow`).
+
+### Subtasks
+
+A ticket can have subtasks (one level only; a subtask lives in the project of its parent).
+
+- `get_ticket` on a subtask shows `Parent: KEY · status · "title" · sprint (or backlog)`. On a
+  parent it shows `Subtasks (2/5 done):` with one line per subtask (key, status, title, assignee,
+  sprint or backlog; up to 30). An open subtask outside the parent's sprint is flagged
+  `⚠ open, outside the parent's sprint`.
+- `search_tickets` and `my_tickets` end the line of a subtask with `↳ PARENT-KEY` and the line of a
+  parent with `subtasks 2/5` (done/total). Tickets without parent or subtasks look as before.
+- `create_ticket` takes `parent` (a key such as `PROJ-12`, same project). The subtask inherits the
+  parent's sprint and epic unless you give a `sprint` (`backlog` keeps it out of any sprint).
+- `update_ticket` takes `parent`: a key to link or change the parent, or `none` to unlink. A parent
+  from another project is rejected before calling the API.
+- API errors `PARENT_IS_SELF`, `PARENT_NOT_FOUND`, `PARENT_IS_SUBTASK` and `TICKET_HAS_SUBTASKS`
+  come back as plain sentences.
+
+Needs a Kanbio API with subtasks. An older one does not send the fields, and nothing changes.
 
 ### Files and photos
 
