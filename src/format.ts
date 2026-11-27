@@ -77,10 +77,53 @@ function sprintName(names: Names, id: string | null): string {
   return names.sprints.get(id) ?? 'a sprint';
 }
 
-/** One line per ticket: key, status, type, priority, title, assignee, sprint. */
+/**
+ * One line per ticket: key, status, type, priority, title, assignee, sprint.
+ * A subtask ends with `↳ PARENT-KEY`, a parent with `subtasks done/total`.
+ */
 export function ticketLine(ticket: Ticket, names: Names): string {
   const points = ticket.storyPoints ? ` · ${ticket.storyPoints} pts` : '';
-  return `${ticket.key} · ${ticket.status} · ${ticket.type} · ${ticket.priority}${points} · "${ticket.title}" · ${person(names, ticket.assigneeId)} · ${sprintName(names, ticket.sprintId)}`;
+  const progress = ticket.subtaskProgress;
+  const marks = [
+    ticket.parent ? `↳ ${ticket.parent.key}` : '',
+    progress && progress.total > 0 ? `subtasks ${progress.done}/${progress.total}` : '',
+  ].filter(Boolean);
+  const tail = marks.map((mark) => ` · ${mark}`).join('');
+  return `${ticket.key} · ${ticket.status} · ${ticket.type} · ${ticket.priority}${points} · "${ticket.title}" · ${person(names, ticket.assigneeId)} · ${sprintName(names, ticket.sprintId)}${tail}`;
+}
+
+const SUBTASKS_SHOWN = 30;
+const SUBTASK_TITLE_LIMIT = 120;
+
+/** The parent line and the subtasks block of get_ticket (empty when neither applies). */
+function subtaskLines(ticket: Ticket, names: Names): string[] {
+  const lines: string[] = [];
+  const parent = ticket.parent;
+  if (parent) {
+    lines.push(
+      `Parent: ${parent.key} · ${parent.status} · "${truncate(parent.title, SUBTASK_TITLE_LIMIT)}" · ${sprintName(names, parent.sprintId)}`,
+    );
+  }
+  const subtasks = ticket.subtasks ?? [];
+  if (subtasks.length > 0) {
+    const done =
+      ticket.subtaskProgress?.done ?? subtasks.filter((s) => s.isDone).length;
+    const total = ticket.subtaskProgress?.total ?? subtasks.length;
+    lines.push(`Subtasks (${done}/${total} done):`);
+    for (const sub of subtasks.slice(0, SUBTASKS_SHOWN)) {
+      const outside =
+        !sub.isDone && sub.sprintId !== ticket.sprintId
+          ? " ⚠ open, outside the parent's sprint"
+          : '';
+      lines.push(
+        `- ${sub.key} · ${sub.status} · "${truncate(sub.title, SUBTASK_TITLE_LIMIT)}" · ${person(names, sub.assigneeId)} · ${sprintName(names, sub.sprintId)}${outside}`,
+      );
+    }
+    if (subtasks.length > SUBTASKS_SHOWN) {
+      lines.push(`… and ${subtasks.length - SUBTASKS_SHOWN} more`);
+    }
+  }
+  return lines;
 }
 
 const DESCRIPTION_LIMIT = 4000;
@@ -106,6 +149,7 @@ export function ticketDetail(
     `Assignee: ${person(names, ticket.assigneeId)} · Reporter: ${person(names, ticket.reporterId)}`,
     `Sprint: ${sprintName(names, ticket.sprintId)}${ticket.labels.length ? ` · Labels: ${ticket.labels.join(', ')}` : ''}`,
     `Updated: ${ticket.updatedAt.slice(0, 16).replace('T', ' ')} UTC`,
+    ...subtaskLines(ticket, names),
     '',
     'Description:',
     ticket.description

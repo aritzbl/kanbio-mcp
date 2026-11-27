@@ -30,6 +30,32 @@ export interface Sprint {
   endDate: string | null;
 }
 
+/** The parent of a subtask, as every ticket response carries it. */
+export interface TicketParent {
+  id: string;
+  key: string;
+  title: string;
+  type: string;
+  stateId: string;
+  status: string;
+  sprintId: string | null;
+}
+
+/** A subtask in the detail of its parent. */
+export interface Subtask {
+  id: string;
+  key: string;
+  title: string;
+  type: string;
+  priority: string;
+  stateId: string;
+  status: string;
+  isDone: boolean;
+  assigneeId: string | null;
+  sprintId: string | null;
+  epicId: string | null;
+}
+
 export interface Ticket {
   id: string;
   projectId: string;
@@ -50,6 +76,12 @@ export interface Ticket {
   labels: string[];
   createdAt: string;
   updatedAt: string;
+  // Subtask fields: an older API does not send them.
+  parentId?: string | null;
+  parent?: TicketParent | null;
+  subtaskProgress?: { total: number; done: number };
+  /** Only in the detail of a ticket (get_ticket). */
+  subtasks?: Subtask[];
 }
 
 /** A state of a project's workflow. */
@@ -244,6 +276,24 @@ export class Kanbio {
       }
       throw error;
     }
+  }
+
+  /**
+   * The ticket to use as parent, by key. It must be in the given project
+   * (a subtask lives in the project of its parent).
+   */
+  async parentTicket(projectId: string, key: string): Promise<Ticket> {
+    const parent = await this.ticket(key);
+    if (parent.projectId !== projectId) {
+      const [own, other] = await Promise.all([
+        this.projectById(projectId),
+        this.projectById(parent.projectId),
+      ]);
+      throw new ToolInputError(
+        `${parent.key} is in ${other?.key ?? 'another project'}, not in ${own?.key ?? 'this project'}. A subtask must be in the same project as its parent.`,
+      );
+    }
+    return parent;
   }
 
   /**
